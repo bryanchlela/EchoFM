@@ -14,8 +14,8 @@ else
     echo "Skipping conda environment creation. Make sure you have the correct environment activated."
 fi
 
-pip install iopath, psutil, scipy, einops, tensorboard
-conda install simplejson
+pip install iopath psutil scipy einops tensorboard opencv-python timm nibabel imageio imageio-ffmpeg open-contrib-cv
+conda install -y simplejson
 # # This is required to enable PEP 660 support
 # pip install --upgrade pip setuptools
 

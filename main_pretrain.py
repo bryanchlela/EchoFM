@@ -14,22 +14,40 @@ import json
 import os
 import time
 
-# import mae_st.util.env
+# import EchoFM.util.env
 
-import mae_st.util.misc as misc
+import EchoFM.util.misc as misc
 
 import numpy as np
 # import timm
 import torch
 import torch.backends.cudnn as cudnn
 from iopath.common.file_io import g_pathmgr as pathmgr
-from mae_st import models_mae
-from mae_st.engine_pretrain import train_one_epoch
-from mae_st.util.misc import NativeScalerWithGradNormCount as NativeScaler
+from EchoFM import models_mae
+from EchoFM.engine_pretrain import train_one_epoch
+from EchoFM.util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 from torch.utils.tensorboard import SummaryWriter
 from data.dataset import EchoDataset_from_Video_mp4
 import torch.distributed as dist
+
+
+def _resolve_device(device_arg: str) -> torch.device:
+    """Return a torch.device, defaulting to the best available accelerator."""
+    mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    if device_arg.lower() == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if mps_available:
+            return torch.device("mps")
+        return torch.device("cpu")
+
+    device = torch.device(device_arg)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested via --device, but CUDA is not available.")
+    if device.type == "mps" and not mps_available:
+        raise RuntimeError("MPS requested via --device, but MPS is not available.")
+    return device
 
 
 def get_args_parser():
@@ -114,7 +132,7 @@ def get_args_parser():
     )
     parser.add_argument(
         "--data_path",
-        default="/raid/camca/sk1064/us/fullset/video/",
+        default="/Users/jdtrades/EchoFM/data/camus_mp4",
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
@@ -123,7 +141,9 @@ def get_args_parser():
         help="path where to tensorboard log",
     )
     parser.add_argument(
-        "--device", default="cuda", help="device to use for training / testing"
+        "--device",
+        default="auto",
+        help="device to use for training / testing (cuda, mps, cpu, or auto)",
     )
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--resume", default="", help="resume from checkpoint")
@@ -215,24 +235,27 @@ def main(args):
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(", ", ",\n"))
 
+    device = _resolve_device(args.device)
+    args.device = str(device)
+
     # 멀티 GPU 초기화
     # if args.distributed:
     #     dist.init_process_group(backend="nccl", init_method=args.dist_url, rank=args.local_rank, world_size=args.world_size)
     #     torch.cuda.set_device(args.local_rank)
     if args.distributed:
         if not dist.is_initialized():  # 이미 초기화된 경우 중복 호출 방지
+            backend = "nccl" if device.type == "cuda" else "gloo"
             dist.init_process_group(
-                backend="nccl", 
-                init_method=args.dist_url, 
-                rank=args.local_rank, 
-                world_size=args.world_size
+                backend=backend,
+                init_method=args.dist_url,
+                rank=args.local_rank,
+                world_size=args.world_size,
             )
-        torch.cuda.set_device(args.local_rank)
+        if device.type == "cuda":
+            torch.cuda.set_device(args.local_rank)
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(", ", ",\n"))
-
-    device = torch.device(args.device)
 
     # fix the seed for reproducibility
     seed = args.seed + misc.get_rank()
@@ -294,11 +317,10 @@ def main(args):
     print("accumulate grad iterations: %d" % args.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
-    if args.distributed:
+    if args.distributed and device.type == "cuda":
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[torch.cuda.current_device()],
-            # find_unused_parameters=True,
         )
         model_without_ddp = model.module
 
@@ -317,7 +339,7 @@ def main(args):
         lr=args.lr,
         betas=beta,
     )
-    loss_scaler = NativeScaler(fp32=args.fp32)
+    loss_scaler = NativeScaler(device_type=device.type, fp32=args.fp32)
 
     misc.load_model(
         args=args,
@@ -372,7 +394,15 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Training time {}".format(total_time_str))
-    print(torch.cuda.memory_allocated())
+    if device.type == "cuda" and torch.cuda.is_available():
+        print(torch.cuda.memory_allocated())
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        try:
+            print(torch.mps.current_allocated_memory())
+        except Exception:
+            print("MPS memory stats unavailable.")
+    else:
+        print("No accelerator memory stats available on this device.")
     return [checkpoint_path]
 
 

@@ -67,7 +67,16 @@ def train_one_epoch(
             b, r, c, t, h, w = samples.shape
             samples = samples.reshape(b * r, c, t, h, w)
 
-        with torch.cuda.amp.autocast(enabled=not fp32):
+        # Use device-aware autocast: CUDA/MPS/CPU
+        if device.type == "cuda":
+            ac = torch.amp.autocast("cuda", enabled=not fp32)
+        elif device.type == "mps":
+            # MPS autocast is available via torch.amp.autocast with device_type 'mps'
+            ac = torch.amp.autocast("mps", enabled=not fp32)
+        else:
+            ac = torch.amp.autocast("cpu", enabled=not fp32)
+
+        with ac:
             loss, _, _ = model(
                 samples,
                 mask_ratio=args.mask_ratio,
@@ -97,7 +106,14 @@ def train_one_epoch(
         if (data_iter_step + 1) % accum_iter == 0:
             optimizer.zero_grad()
 
-        torch.cuda.synchronize()
+        # Synchronize per device to avoid host/device race when measuring
+        if device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            try:
+                torch.mps.synchronize()
+            except Exception:
+                pass
 
         metric_logger.update(loss=loss_value)
         metric_logger.update(cpu_mem=misc.cpu_mem_usage()[0])

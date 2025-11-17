@@ -26,7 +26,8 @@ def is_master_proc(multinode=False):
         if multinode:
             return dist.get_rank() % dist.get_world_size() == 0
         else:
-            return dist.get_rank() % torch.cuda.device_count() == 0
+            num_devices = torch.cuda.device_count() if torch.cuda.is_available() else 1
+            return dist.get_rank() % num_devices == 0
     else:
         return True
 

@@ -13,13 +13,21 @@ import EchoFM.util.misc as misc
 import torch
 
 
+def _autocast_context(device: torch.device, enabled: bool = True):
+    if device.type == "cuda":
+        return torch.amp.autocast("cuda", enabled=enabled)
+    if device.type == "mps":
+        return torch.amp.autocast("mps", enabled=enabled)
+    return torch.amp.autocast("cpu", enabled=enabled)
+
+
 @torch.no_grad()
 def test(data_loader, model, device, test_meter, fp32=False):
     metric_logger = misc.MetricLogger(delimiter="  ")
 
     # switch to evaluation mode
     model.eval()
-    softmax = torch.nn.Softmax(dim=1).cuda()
+    softmax = torch.nn.Softmax(dim=1).to(device)
 
     for cur_iter, (images, labels, video_idx) in enumerate(data_loader):
         images = images.to(device, non_blocking=True)
@@ -32,7 +40,7 @@ def test(data_loader, model, device, test_meter, fp32=False):
             labels = labels.view(b * r)
 
         # compute output
-        with torch.cuda.amp.autocast(enabled=not fp32):
+        with _autocast_context(device, enabled=not fp32):
             preds = model(images)
             preds = softmax(preds)
 

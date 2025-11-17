@@ -18,7 +18,14 @@ import random
 import torch
 
 
-def _get_pixels(per_pixel, rand_color, patch_size, dtype=torch.float32, device="cuda"):
+def _get_pixels(per_pixel, rand_color, patch_size, dtype=torch.float32, device=None):
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     # NOTE I've seen CUDA illegal memory access errors being caused by the normal_()
     # paths, flip the order so normal is run on CPU if this becomes a problem
     # Issue has been fixed in master https://github.com/pytorch/pytorch/issues/19508
@@ -60,7 +67,7 @@ class RandomErasing:
         min_count=1,
         max_count=None,
         num_splits=0,
-        device="cuda",
+        device=None,
         cube=True,
     ):
         self.probability = probability
@@ -81,7 +88,15 @@ class RandomErasing:
             self.per_pixel = True  # per pixel random normal
         else:
             assert not mode or mode == "const"
-        self.device = device
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
 
     def _erase(self, img, chan, img_h, img_w, dtype):
         if random.random() > self.probability:

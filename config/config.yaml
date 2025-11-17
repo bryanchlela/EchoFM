@@ -5,13 +5,16 @@ dec_arch: MAEViTDecoder
 
 # wandb
 proj_name: mae3d
+# dataset
+dataset: echo #mgh echo
+
 run_name: ${proj_name}_${arch}_${dataset}
 wandb_id:
 disable_wandb: 0
 eval : True
-# dataset
-dataset: echo #mgh echo
-data_path: /nvme/zhoulei/MSD
+
+#data_path: /nvme/zhoulei/MSD
+data_path: /Users/jdtrades/CAMUS_public/mp4
 data_seed: 12345
 ts_fold: 0
 resize_h_w : [224,224]
@@ -86,11 +89,14 @@ seed:
 debug: false
 
 #path
-base_pr_path : '/mount/home/local/PARTNERS/sk1064/workspace/nature/'
-base_data_path : '/mount/mnt/CAMCA/home/sk/us'
-base_json_path : '/mount/home/local/PARTNERS/sk1064/workspace/echo_samv2/dataset/Echo'
-json_path : '/camus/train_2c4c.json'
-output_dir: ${base_pr_path}/output/ssl-framework/${run_name}
-ckpt_dir: ${output_dir}/ckpts
+#base_pr_path : '/mount/home/local/PARTNERS/sk1064/workspace/nature/'
+#base_data_path : '/mount/mnt/CAMCA/home/sk/us'
+#base_json_path : '/mount/home/local/PARTNERS/sk1064/workspace/echo_samv2/dataset/Echo'
+#json_path : '/camus/train_2c4c.json'
+#output_dir: ${base_pr_path}/output/ssl-framework/${run_name}
+base_pr_path : /Users/jdtrades/EchoFM
+base_data_path : /Users/jdtrades/EchoFM/CAMUS_public
+output_dir : /Users/jdtrades/EchoFM/output/${run_name}
+ckpt_dir: /Users/jdtrades/EchoFM/output/${run_name}
 
-base_mgh_data_path : /mount/mnt/CAMCA/AorticStenosis
+#base_mgh_data_path : /mount/mnt/CAMCA/AorticStenosis

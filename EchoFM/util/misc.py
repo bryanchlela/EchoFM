@@ -10,6 +10,7 @@
 # --------------------------------------------------------
 
 import builtins
+import argparse
 import datetime
 import math
 import os
@@ -145,7 +146,10 @@ class MetricLogger:
             "time: {time}",
             "data: {data}",
         ]
-        if torch.cuda.is_available():
+        has_accel = torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+        if has_accel:
             log_msg.append("max mem: {memory:.0f}")
         log_msg = self.delimiter.join(log_msg)
         MB = 1024.0 * 1024.0
@@ -156,7 +160,14 @@ class MetricLogger:
             if i % print_freq == 0 or i == len(iterable) - 1:
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
-                if torch.cuda.is_available():
+                if has_accel:
+                    if torch.cuda.is_available():
+                        memory = torch.cuda.max_memory_allocated() / MB
+                    else:
+                        try:
+                            memory = torch.mps.current_allocated_memory() / MB
+                        except Exception:
+                            memory = 0.0
                     print(
                         log_msg.format(
                             i,
@@ -165,7 +176,7 @@ class MetricLogger:
                             meters=str(self),
                             time=str(iter_time),
                             data=str(data_time),
-                            memory=torch.cuda.max_memory_allocated() / MB,
+                            memory=memory,
                         )
                     )
 
@@ -260,7 +271,10 @@ def init_distributed_mode(args):
         args.gpu = int(os.environ["LOCAL_RANK"])
     elif "SLURM_PROCID" in os.environ:
         args.rank = int(os.environ["SLURM_PROCID"])
-        args.gpu = args.rank % torch.cuda.device_count()
+        if torch.cuda.is_available():
+            args.gpu = args.rank % max(torch.cuda.device_count(), 1)
+        else:
+            args.gpu = 0
     else:
         print("Not using distributed mode")
         setup_for_distributed(is_master=True)  # hack
@@ -269,8 +283,11 @@ def init_distributed_mode(args):
 
     args.distributed = True
 
-    torch.cuda.set_device(args.gpu)
-    args.dist_backend = "nccl"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
+        args.dist_backend = "nccl"
+    else:
+        args.dist_backend = "gloo"
     print(
         "| distributed init (rank {}): {}, gpu {}".format(
             args.rank, args.dist_url, args.gpu
@@ -290,8 +307,16 @@ def init_distributed_mode(args):
 class NativeScalerWithGradNormCount:
     state_dict_key = "amp_scaler"
 
-    def __init__(self, fp32=False):
-        self._scaler = torch.cuda.amp.GradScaler(enabled=not fp32)
+    def __init__(self, device_type="cuda", fp32=False):
+        if device_type not in {"cuda", "mps", "cpu"}:
+            device_type = "cuda" if torch.cuda.is_available() else (
+                "mps"
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                else "cpu"
+            )
+        self.device_type = device_type
+        enable_amp = device_type in {"cuda", "mps"} and not fp32
+        self._scaler = torch.amp.GradScaler(device=self.device_type, enabled=enable_amp)
 
     def __call__(
         self,
@@ -388,7 +413,8 @@ def load_model(args, model_without_ddp, optimizer, loss_scaler):
             )
         else:
             with pathmgr.open(args.resume, "rb") as f:
-                checkpoint = torch.load(f, map_location="cpu")
+                torch.serialization.add_safe_globals([argparse.Namespace])
+                checkpoint = torch.load(f, map_location="cpu", weights_only=False)
         model_without_ddp.load_state_dict(checkpoint["model"])
         print("Resume checkpoint %s" % args.resume)
         if (
@@ -406,7 +432,13 @@ def load_model(args, model_without_ddp, optimizer, loss_scaler):
 def all_reduce_mean(x):
     world_size = get_world_size()
     if world_size > 1:
-        x_reduce = torch.tensor(x).cuda()
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+        x_reduce = torch.tensor(x, device=device)
         dist.all_reduce(x_reduce)
         x_reduce /= world_size
         return x_reduce.item()
@@ -420,6 +452,11 @@ def gpu_mem_usage():
     """
     if torch.cuda.is_available():
         mem_usage_bytes = torch.cuda.max_memory_allocated()
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        try:
+            mem_usage_bytes = torch.mps.current_allocated_memory()
+        except Exception:
+            mem_usage_bytes = 0
     else:
         mem_usage_bytes = 0
     return mem_usage_bytes / 1024**3

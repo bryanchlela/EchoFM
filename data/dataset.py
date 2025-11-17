@@ -1,7 +1,10 @@
 from pathlib import Path
 import re
 
-import cv2
+try:
+    import cv2  # type: ignore
+except ModuleNotFoundError:
+    cv2 = None
 from PIL import Image
 from functools import partial
 
@@ -14,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader as PytorchDataLoader
 from torchvision import transforms as T, utils
+from torchvision.io import read_video
 
 from einops import rearrange
 import os
@@ -306,38 +310,41 @@ def video_to_tensor(
     crop_size=None
 ) -> torch.Tensor:          # shape (1, channels, frames, height, width)
 
-    video = cv2.VideoCapture(path)
-
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    # print ("PATH", path)
-    # print ("TOTAL frame : ",total_frames )
     frames = []
-    check = True
-    
+
     shear_x = random.uniform(-5, 5)
     shear_y = random.uniform(-5, 5)
     contrast_factor = random.uniform(0.6, 1.4)
 
-    while check:
-        check, frame = video.read()
+    if cv2 is not None:
+        video = cv2.VideoCapture(path)
+        check = True
+        while check:
+            check, frame = video.read()
+            if not check or frame is None:
+                continue
+            frame = transform(frame)
+            if frame.ndim == 3 and frame.shape[0] == 1:
+                frame = frame.repeat(3, 1, 1)
+            frames.append(frame)
+        video.release()
+    else:
+        video_frames, _, _ = read_video(path, pts_unit="sec")
+        if num_frames > 0:
+            video_frames = video_frames[:num_frames]
+        for frame in video_frames:
+            frame = transform(frame)
+            if frame.ndim == 3 and frame.shape[0] == 1:
+                frame = frame.repeat(3, 1, 1)
+            frames.append(frame)
 
-        if not check:
-            continue
-        # frame = np.transpose(frame, (2, 0, 1))
-        # 고정된 augmentation 값들로 transform 적용
-        # frame = transform(frame, shear_x, shear_y, contrast_factor)
-        frame = transform(frame)
-        frames.append(rearrange(frame, '... -> 1 ...'))
-         
-    # convert list of frames to numpy array
-    frames = np.array(np.concatenate(frames, axis=0))
-    # frames = rearrange(frames, 'f c h w -> c f h w')
-    frames = rearrange(frames, 'f c h w -> c f h w')
+    if not frames:
+        raise RuntimeError(f"Failed to decode video: {path}")
 
-    frames_torch = torch.tensor(frames).float()
+    frames = torch.stack(frames, dim=0)
+    frames = rearrange(frames, "f c h w -> c f h w").float()
 
-    return frames_torch
+    return frames
 
 
 

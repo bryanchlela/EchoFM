@@ -21,6 +21,24 @@ from timm.data import Mixup
 from timm.utils import accuracy
 
 
+def _autocast_context(device: torch.device, enabled: bool = True):
+    if device.type == "cuda":
+        return torch.amp.autocast("cuda", enabled=enabled)
+    if device.type == "mps":
+        return torch.amp.autocast("mps", enabled=enabled)
+    return torch.amp.autocast("cpu", enabled=enabled)
+
+
+def _sync_device(device: torch.device):
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        try:
+            torch.mps.synchronize()
+        except Exception:
+            pass
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     criterion: torch.nn.Module,
@@ -83,7 +101,7 @@ def train_one_epoch(
             if mixup_fn is not None:
                 samples, targets = mixup_fn(samples, targets)
 
-        with torch.cuda.amp.autocast(enabled=not fp32):
+        with _autocast_context(device, enabled=not fp32):
             outputs = model(samples)
             loss = criterion(outputs, targets)
 
@@ -105,7 +123,7 @@ def train_one_epoch(
         if (data_iter_step + 1) % accum_iter == 0:
             optimizer.zero_grad()
 
-        torch.cuda.synchronize()
+        _sync_device(device)
 
         metric_logger.update(loss=loss_value)
         metric_logger.update(cpu_mem=misc.cpu_mem_usage()[0])
@@ -158,7 +176,7 @@ def evaluate(data_loader, model, device):
             target = target.view(b * r)
 
         # compute output
-        with torch.cuda.amp.autocast():
+        with _autocast_context(device):
             output = model(images)
             loss = criterion(output, target)
 
